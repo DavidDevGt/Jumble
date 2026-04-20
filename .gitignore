@@ -1,0 +1,60 @@
+# .gitignore - Archivos a ignorar en git
+
+# Binarios y compilados
+*.so
+*.o
+*.a
+*.dylib
+*.dll
+*.exe
+*.out
+
+# LÖVE
+*.love
+dist/
+build/
+
+# IDEs
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+.DS_Store
+.project
+.settings/
+.classpath
+
+# Logs
+*.log
+debug.log
+server.log
+client.log
+
+# Temporales
+temp/
+tmp/
+cache/
+*.tmp
+
+# OS
+Thumbs.db
+Desktop.ini
+.AppleDouble
+
+# Node (si se usa para herramientas)
+node_modules/
+package-lock.json
+
+# Python
+__pycache__/
+*.py[cod]
+*.egg-info/
+.venv/
+venv/
+
+# Datos sensibles
+config.local.lua
+secrets.lua
+.env
+*.key
