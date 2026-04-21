@@ -13,12 +13,14 @@ local bitser = require("libs.bitser")
 
 function Server:new()
     local self = setmetatable({}, Server)
-    
+
     self.socket = nil
     self.clients = {}
     self.nextClientId = 1
     self.lastBroadcastTick = 0
-    
+    -- Buffer reutilizado en broadcastGameState para evitar 1 alloc por broadcast.
+    self.broadcastBuffer = {}
+
     return self
 end
 
@@ -107,13 +109,13 @@ function Server:handleInput(clientId, data)
     local client = self.clients[clientId]
     if not client then return end
     
-    -- Rate limiting: max 60 inputs por segundo
+    -- Rate limit: max 1 input cada MIN_TICKS_BETWEEN_INPUTS ticks del servidor.
     local currentTick = SERVER_STATE.tick
-    if currentTick - client.lastInputTick < 1 then
-        -- Ignorar input si viene muy rápido
+    local ticksSinceLastInput = currentTick - client.lastInputTick
+    if ticksSinceLastInput < NetworkConfig.MIN_TICKS_BETWEEN_INPUTS then
         return
     end
-    
+
     client.lastInputTick = currentTick
     
     -- Enviar input al GameState para procesamiento
@@ -138,18 +140,22 @@ function Server:broadcastGameState(state, tick)
         return
     end
     
-    -- Serializar solo datos mínimos
-    local minimalEntities = {}
+    -- Serializar solo datos mínimos reutilizando el buffer.
+    local buffer = self.broadcastBuffer
+    for i = #buffer, 1, -1 do buffer[i] = nil end
+
+    local n = 0
     for _, entity in ipairs(state) do
         if entity.getNetworkState then
-            table.insert(minimalEntities, entity:getNetworkState())
+            n = n + 1
+            buffer[n] = entity:getNetworkState()
         end
     end
-    
+
     local packet = {
         type = MessageTypes.STATE_UPDATE,
         tick = tick,
-        entities = minimalEntities
+        entities = buffer
     }
     
     local serialized = bitser.serialize(packet)
