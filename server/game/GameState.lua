@@ -12,8 +12,12 @@ function GameState:new()
     
     self.players = {}
     self.entities = {}
-    self.tick = 0
-    
+    -- Contador de ticks completados. Renombrado desde self.tick para no
+    -- chocar con GameState:tick() (el método quedaba sombreado tras la
+    -- primera llamada, ya que Lua busca campo en la instancia antes que
+    -- método en la metatable).
+    self.tickCount = 0
+
     return self
 end
 
@@ -60,7 +64,7 @@ function GameState:tick(dt)
     -- Validar posiciones
     self:validatePositions()
     
-    self.tick = self.tick + 1
+    self.tickCount = self.tickCount + 1
 end
 
 function GameState:updateCollisions()
