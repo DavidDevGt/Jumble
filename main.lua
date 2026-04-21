@@ -21,6 +21,11 @@ local CONFIG = {
 -- ============================================================================
 
 function love.load()
+    -- GC tuning: trigger earlier (pause=110) and step aggressively to
+    -- smooth frame times. See docs/QUICK_WINS.md QW#5.
+    collectgarbage("setpause", 110)
+    collectgarbage("setstepmul", 200)
+
     print("[JUMBLE] Inicializando...")
     
     -- Estado del juego
