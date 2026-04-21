@@ -62,9 +62,22 @@ function love.load()
     _G.physicsWorld = DeterministicPhysics:new(GameConfig.GRAVITY, false)
     Logger:debug("PHYSICS", "Server physics initialized with fixed timestep")
     
+    -- System de niveles (debe inicializarse primero)
+    _G.levelManager = require("server.game.LevelManager"):new()
+    _G.levelManager:registerLevel(require("server.levels.Level1"))
+    _G.levelManager:registerLevel(require("server.levels.Level2"))
+    _G.levelManager:registerLevel(require("server.levels.Level3"))
+    _G.levelManager:registerLevel(require("server.levels.Level4"))
+    _G.levelManager:registerLevel(require("server.levels.Level5"))
+    
+    -- Cargar nivel inicial
+    _G.levelManager:loadLevel(1)
+    Logger:info("LEVEL", "Level system initialized with 5 levels")
+    
     -- Módulos del servidor
     _G.server = require("server.network.Server"):new()
     _G.gameState = require("server.game.GameState"):new(_G.physicsWorld, GameConfig)
+    _G.gameState.levelManager = _G.levelManager  -- Vincular levelManager a gameState
     _G.tickManager = require("server.game.TickManager"):new()
     
     Logger:info("SERVER", "✓ Servidor listo en puerto " .. 

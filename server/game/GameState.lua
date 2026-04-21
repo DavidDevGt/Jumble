@@ -6,6 +6,7 @@ GameState.__index = GameState
 
 local Player = require("common.entities.Player")
 local GameConfig = require("common.config.GameConfig")
+local Logger = require("common.utils.Logger")
 
 function GameState:new(physicsWorld, config)
     local self = setmetatable({}, GameState)
@@ -17,6 +18,8 @@ function GameState:new(physicsWorld, config)
     self.players = {}
     self.entities = {}
     self.tick = 0
+    self.completed_players = {}  -- Jugadores que completaron el nivel
+    self.levelManager = nil      -- Se asigna después
     
     return self
 end
@@ -69,6 +72,9 @@ function GameState:tick(dt)
     -- Validar posiciones
     self:validatePositions()
     
+    -- Verificar completación de niveles
+    self:checkLevelCompletion()
+    
     self.tick = self.tick + 1
 end
 
@@ -92,6 +98,32 @@ function GameState:validatePositions()
             player.position.y = GameConfig.WORLD_HEIGHT
         end
     end
+end
+
+function GameState:checkLevelCompletion()
+    -- Verificar si algún jugador completó el nivel
+    if not self.levelManager then
+        return
+    end
+    
+    for _, player in pairs(self.players) do
+        -- Verificar si ya completó
+        if not self.completed_players[player.id] then
+            -- Verificar si está en la meta
+            if self.levelManager:checkLevelCompletion(player) then
+                self.completed_players[player.id] = true
+                Logger:info("LEVEL", "Servidor: Jugador " .. player.id .. " completó el nivel")
+            end
+        end
+    end
+end
+
+function GameState:getCompletedPlayers()
+    return self.completed_players
+end
+
+function GameState:resetLevelCompletion()
+    self.completed_players = {}
 end
 
 function GameState:getState()

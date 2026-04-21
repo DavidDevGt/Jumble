@@ -49,10 +49,11 @@ function StateMachine:transition(newState, args)
     
     -- Registrar en historial
     local previousState = self.currentState
+    local currentTime = love and love.timer and love.timer.getTime() or os.time()
     table.insert(self.history, {
         from = previousState,
         to = newState,
-        timestamp = love.timer.getTime()
+        timestamp = currentTime
     })
     
     -- Mantener historial manejable

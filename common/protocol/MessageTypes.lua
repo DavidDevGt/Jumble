@@ -14,6 +14,12 @@ MessageTypes.STATE_UPDATE = 11
 MessageTypes.ACTION = 12
 MessageTypes.EVENT = 13
 
+-- NIVELES
+MessageTypes.LEVEL_CHANGE = 30
+MessageTypes.LEVEL_INFO = 31
+MessageTypes.LEVEL_COMPLETE = 32
+MessageTypes.PLAYER_COMPLETED_LEVEL = 33
+
 -- SINCRONIZACIÓN
 MessageTypes.PING = 20
 MessageTypes.PONG = 21
@@ -34,6 +40,10 @@ MessageTypes.NAMES = {
     [20] = "PING",
     [21] = "PONG",
     [22] = "RESYNC",
+    [30] = "LEVEL_CHANGE",
+    [31] = "LEVEL_INFO",
+    [32] = "LEVEL_COMPLETE",
+    [33] = "PLAYER_COMPLETED_LEVEL",
     [99] = "ERROR"
 }
 

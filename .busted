@@ -1,0 +1,20 @@
+return {
+  default = {
+    verbose = true,
+    coverage = false,
+    randomize = false,
+    seed = math.randomseed(os.time()),
+    output = "plainTerminal",
+    busted = {
+      enable = true
+    }
+  },
+  coverage = {
+    verbose = true,
+    coverage = true,
+    output = "plainTerminal",
+    busted = {
+      enable = true
+    }
+  }
+}
