@@ -22,6 +22,9 @@ function Renderer:new()
     self.players = {}
     self.localPlayerId = 1
     
+    -- Plataformas
+    self.platforms = {}
+    
     return self
 end
 
@@ -110,6 +113,11 @@ function Renderer:draw()
     -- Dibujar mundo
     self:drawWorld()
     
+    -- Dibujar plataformas
+    if self.platforms then
+        self:drawPlatforms()
+    end
+    
     -- Dibujar entidades
     if self.players then
         for id, player in pairs(self.players) do
@@ -129,17 +137,25 @@ end
 
 function Renderer:drawWorld()
     -- Fondo
-    love.graphics.setColor(0.3, 0.4, 0.5)
+    love.graphics.setColor(0.2, 0.25, 0.3)
     love.graphics.rectangle("fill", 0, 0, GameConfig.WORLD_WIDTH, GameConfig.WORLD_HEIGHT)
-    
-    -- Suelo
-    love.graphics.setColor(0.2, 0.6, 0.2)
-    love.graphics.rectangle("fill", 0, GameConfig.WORLD_HEIGHT - 20, GameConfig.WORLD_WIDTH, 20)
-    
-    -- Bordes
-    love.graphics.setColor(1, 1, 1)
-    love.graphics.setLineWidth(2)
-    love.graphics.rectangle("line", 0, 0, GameConfig.WORLD_WIDTH, GameConfig.WORLD_HEIGHT)
+end
+
+function Renderer:drawPlatforms()
+    for _, platform in ipairs(self.platforms) do
+        if platform.color then
+            love.graphics.setColor(unpack(platform.color))
+        else
+            love.graphics.setColor(0.6, 0.4, 0.2)
+        end
+        
+        love.graphics.rectangle("fill", platform.x, platform.y, platform.w, platform.h)
+        
+        -- Borde
+        love.graphics.setColor(1, 1, 1)
+        love.graphics.setLineWidth(1)
+        love.graphics.rectangle("line", platform.x, platform.y, platform.w, platform.h)
+    end
 end
 
 function Renderer:drawPlayer(id, player)
@@ -195,6 +211,11 @@ end
 
 function Renderer:clearPlayers()
     self.players = {}
+end
+
+function Renderer:addPlatforms(platformsList)
+    self.platforms = platformsList or {}
+    Logger:debug("RENDERER", "Plataformas cargadas: " .. #self.platforms)
 end
 
 return Renderer
