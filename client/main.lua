@@ -42,10 +42,11 @@ function love.load()
     
     -- Inicializar mundos
     initPhysics()
-    
-    -- Inicializar input
+
+    -- Inicializar input y cliente de red
     _G.inputManager = require("client.network.InputManager"):new()
-    
+    _G.client = require("client.network.Client"):new()
+
     Logger:info("JUMBLE", "Cliente listo")
 end
 
@@ -103,18 +104,22 @@ end
 
 function love.update(dt)
     GAME_STATE.gameTime = GAME_STATE.gameTime + dt
-    
+
+    -- El cliente de red debe procesar eventos enet cada frame (incluyendo
+    -- durante el menú, así el handshake arranca temprano).
+    client:update(dt)
+
     if GAME_STATE.mode == "menu" then
         return
     end
-    
+
     if GAME_STATE.mode == "playing" then
         -- Actualizar input
         inputManager:update(dt)
-        
+
         -- Actualizar física
         physicsWorld:update(dt)
-        
+
         -- Actualizar jugadores
         updateLocalPlayer(dt)
     end
