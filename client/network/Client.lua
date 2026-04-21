@@ -1,5 +1,5 @@
 -- client/network/Client.lua
--- Gestor de conexión del cliente
+-- Gestor de conexión del cliente con error handling robusto
 
 local Client = {}
 Client.__index = Client
@@ -11,97 +11,251 @@ local Logger = require("common.utils.Logger")
 -- Cargar bitser para serialización compacta
 local bitser = require("libs.bitser")
 
+-- Estados de conexión
+Client.STATE_IDLE = "idle"
+Client.STATE_CONNECTING = "connecting"
+Client.STATE_CONNECTED = "connected"
+Client.STATE_FAILED = "failed"
+Client.STATE_DISCONNECTED = "disconnected"
+
 function Client:new()
     local self = setmetatable({}, Client)
     
+    -- Conexión
     self.connected = false
     self.clientId = nil
     self.socket = nil
     self.serverHost = NetworkConfig.SERVER_HOST
     self.serverPort = NetworkConfig.SERVER_PORT
-    self.connectionTime = 0
-    self.lastSendTime = 0
     
-    -- Buffer de interpolación
+    -- Estado de conexión (para error handling)
+    self.connectionState = self.STATE_IDLE
+    self.connectionAttempts = 0
+    self.maxConnectionAttempts = 3
+    self.connectionStartTime = nil
+    self.retryDelay = 1  -- Exponential backoff
+    self.lastAttemptTime = 0
+    self.errorMessage = nil
+    
+    -- Heartbeat / keep-alive
+    self.lastHeartbeatTime = 0
+    self.heartbeatInterval = NetworkConfig.HEARTBEAT_INTERVAL or 5
+    self.heartbeatTimeout = 10  -- segundos
+    
+    -- Buffer de datos
     self.entityStates = {}
     self.pendingInputs = {}
     
     return self
 end
 
+--- Obtener estado actual de conexión
+-- @return string - Estado (idle, connecting, connected, failed, disconnected)
+function Client:getConnectionState()
+    return self.connectionState
+end
+
+--- Obtener mensaje de error (si falla conexión)
+-- @return string|nil - Mensaje de error
+function Client:getErrorMessage()
+    return self.errorMessage
+end
+
+--- Obtener número de intentos de conexión
+-- @return number
+function Client:getConnectionAttempts()
+    return self.connectionAttempts
+end
+
+--- Cambiar estado de conexión con logging
+-- @param newState string - Nuevo estado
+-- @param errorMsg string - Mensaje de error (si aplica)
+local function setConnectionState(self, newState, errorMsg)
+    if newState == self.connectionState then return end
+    
+    self.connectionState = newState
+    self.errorMessage = errorMsg
+    
+    if newState == self.STATE_CONNECTED then
+        Logger:info("CLIENT", "✓ Conectado exitosamente")
+        self.connected = true
+    elseif newState == self.STATE_FAILED then
+        Logger:error("CLIENT", "✗ Conexión fallida: " .. tostring(errorMsg))
+        self.connected = false
+        -- Preparar para reintentar con backoff
+        self.retryDelay = math.min(self.retryDelay * 2, 10)  -- Max 10s backoff
+    elseif newState == self.STATE_DISCONNECTED then
+        Logger:warn("CLIENT", "⚠ Desconectado: " .. tostring(errorMsg))
+        self.connected = false
+    elseif newState == self.STATE_CONNECTING then
+        Logger:debug("CLIENT", "→ Conectando (intento " .. self.connectionAttempts .. "/" .. 
+                              self.maxConnectionAttempts .. ")")
+    end
+end
+
+--- Conectar al servidor (con reintentos y backoff exponencial)
 function Client:connect()
-    if self.connected then return end
+    -- Si ya está conectado, no hacer nada
+    if self.connectionState == self.STATE_CONNECTED then return end
     
-    self.connectionTime = self.connectionTime + love.timer.getDelta()
+    -- Si falló permanentemente, no reintentar
+    if self.connectionState == self.STATE_FAILED then return end
     
-    if self.connectionTime > NetworkConfig.CONNECTION_TIMEOUT then
-        Logger:warn("CLIENT", "Timeout de conexión")
-        self.connectionTime = 0
+    local currentTime = love.timer.getTime()
+    
+    -- Si ya estamos intentando, esperar a que se complete
+    if self.connectionState == self.STATE_CONNECTING then
+        local elapsed = currentTime - self.connectionStartTime
+        
+        if elapsed > NetworkConfig.CONNECTION_TIMEOUT then
+            -- Timeout en este intento
+            Logger:warn("CLIENT", "Timeout en intento " .. self.connectionAttempts)
+            self.socket = nil
+            self.connectionState = self.STATE_IDLE  -- Permitir reintentar
+        end
+        
         return
     end
     
-    if not self.socket then
-        Logger:info("CLIENT", "Conectando a " .. 
-                             self.serverHost .. ":" .. self.serverPort .. " (UDP)")
-        
-        -- Forzar UDP con sock.lua
-        self.socket = require("sock").newClient(self.serverHost, self.serverPort)
-        self.socket:setTimeout(0)
-        self.socket:setBroadcast(true)
+    -- Esperar backoff entre intentos
+    if currentTime - self.lastAttemptTime < self.retryDelay then
+        return
     end
     
-    -- Intentar handshake
+    -- Iniciar nuevo intento
+    self.connectionAttempts = self.connectionAttempts + 1
+    
+    if self.connectionAttempts > self.maxConnectionAttempts then
+        setConnectionState(self, self.STATE_FAILED, 
+            "Max connection attempts exceeded (" .. self.maxConnectionAttempts .. ")")
+        return
+    end
+    
+    -- Cambiar a estado "conectando"
+    setConnectionState(self, self.STATE_CONNECTING)
+    self.connectionStartTime = currentTime
+    self.lastAttemptTime = currentTime
+    
+    -- Crear socket
+    if not self.socket then
+        local success, err = pcall(function()
+            self.socket = require("sock").newClient(self.serverHost, self.serverPort)
+            if self.socket then
+                self.socket:setTimeout(0)
+            end
+        end)
+        
+        if not success then
+            Logger:error("CLIENT", "Failed to create socket: " .. tostring(err))
+            self.connectionState = self.STATE_IDLE
+            return
+        end
+        
+        if not self.socket then
+            Logger:error("CLIENT", "Socket creation returned nil")
+            self.connectionState = self.STATE_IDLE
+            return
+        end
+    end
+    
+    -- Enviar CONNECT packet
     local connectPacket = {
         type = MessageTypes.CONNECT,
-        timestamp = love.timer.getTime()
+        version = 1,  -- Protocol version
+        timestamp = currentTime
     }
     
-    local success, err = self.socket:send(bitser.serialize(connectPacket))
+    local success, err = pcall(function()
+        self.socket:send(bitser.serialize(connectPacket))
+    end)
+    
     if not success then
-        Logger:warn("CLIENT", "Error al enviar CONNECT: " .. tostring(err))
+        Logger:warn("CLIENT", "Failed to send CONNECT: " .. tostring(err))
+        self.socket = nil
+        self.connectionState = self.STATE_IDLE
+        return
     end
+    
+    Logger:debug("CLIENT", "CONNECT packet sent to " .. self.serverHost .. ":" .. self.serverPort)
 end
 
 function Client:isConnected()
     return self.connected
 end
 
+--- Procesar update de conexión
+-- @param dt number - Delta time
 function Client:update(dt)
-    if not self.connected then 
+    -- Si no está conectado, intentar conectar
+    if not self.connected then
         self:connect()
-        return 
+        return
     end
     
     if not self.socket then return end
     
     -- Procesar paquetes recibidos
-    local data, msg = self.socket:receive()
-    if data then
+    local success, data = pcall(function()
+        return self.socket:receive()
+    end)
+    
+    if success and data then
         local ok, packet = pcall(bitser.deserialize, data)
         if ok and packet then
             self:handlePacket(packet)
+        else
+            Logger:warn("CLIENT", "Failed to deserialize packet")
         end
     end
     
-    -- Reenviar inputs pendientes si no hay ack
+    -- Enviar heartbeat cada 5 segundos
+    self.lastHeartbeatTime = self.lastHeartbeatTime + dt
+    if self.lastHeartbeatTime > self.heartbeatInterval then
+        self:sendHeartbeat()
+        self.lastHeartbeatTime = 0
+    end
+    
+    -- Reenviar inputs pendientes si es necesario
     self:resendPendingInputs()
 end
 
-function Client:sendInput(input)
-    if not self.connected then return end
+--- Enviar heartbeat/ping
+function Client:sendHeartbeat()
+    if not self.connected or not self.socket then return end
     
-    if not self.socket then return end
-    
-    -- Serializar input compacto (booleanos, no vector)
     local packet = {
-        type = MessageTypes.INPUT,
+        type = MessageTypes.PING,
         clientId = self.clientId,
-        input = input,  -- Vector2 o tabla {x, y, jump}
         timestamp = love.timer.getTime()
     }
     
-    local serialized = bitser.serialize(packet)
-    self.socket:send(serialized)
+    local success, err = pcall(function()
+        self.socket:send(bitser.serialize(packet))
+    end)
+    
+    if not success then
+        Logger:warn("CLIENT", "Failed to send heartbeat: " .. tostring(err))
+        setConnectionState(self, self.STATE_DISCONNECTED, "Heartbeat failed: " .. tostring(err))
+    end
+end
+
+function Client:sendInput(input)
+    if not self.connected or not self.socket then return end
+    
+    local packet = {
+        type = MessageTypes.INPUT,
+        clientId = self.clientId,
+        input = input,
+        timestamp = love.timer.getTime()
+    }
+    
+    local success, err = pcall(function()
+        self.socket:send(bitser.serialize(packet))
+    end)
+    
+    if not success then
+        Logger:warn("CLIENT", "Failed to send input: " .. tostring(err))
+    end
 end
 
 function Client:handlePacket(data)
@@ -113,14 +267,24 @@ function Client:handlePacket(data)
         self:handleStateUpdate(data)
     elseif msgType == MessageTypes.PONG then
         -- Actualizar latencia
+        if data.timestamp then
+            local latency = (love.timer.getTime() - data.timestamp) * 1000
+            Logger:debug("CLIENT", "Latency: " .. string.format("%.1fms", latency))
+        end
+    elseif msgType == MessageTypes.ERROR then
+        Logger:error("CLIENT", "Server error: " .. tostring(data.message))
+        setConnectionState(self, self.STATE_DISCONNECTED, data.message)
     end
 end
 
 function Client:handleConnectResponse(data)
     if data.status == "accepted" then
         self.clientId = data.clientId
-        self.connected = true
-        Logger:info("CLIENT", "Conectado con ID: " .. self.clientId)
+        setConnectionState(self, self.STATE_CONNECTED)
+        self.connectionAttempts = 0  -- Reset attempts on success
+        self.retryDelay = 1  -- Reset backoff
+    else
+        setConnectionState(self, self.STATE_DISCONNECTED, "Connection rejected: " .. tostring(data.status))
     end
 end
 
@@ -131,8 +295,8 @@ function Client:handleStateUpdate(data)
             self.entityStates[entity.id] = {
                 x = entity.x,
                 y = entity.y,
-                vx = entity.vx,
-                vy = entity.vy,
+                vx = entity.vx or 0,
+                vy = entity.vy or 0,
                 state = entity.state,
                 tick = data.tick
             }
@@ -146,6 +310,30 @@ end
 
 function Client:resendPendingInputs()
     -- Implementar si necesitamos reliable delivery para inputs
+end
+
+--- Desconectar del servidor
+function Client:disconnect()
+    if self.socket then
+        pcall(function()
+            self.socket:destroy()
+        end)
+        self.socket = nil
+    end
+    
+    self.connected = false
+    self.clientId = nil
+    setConnectionState(self, self.STATE_IDLE)
+end
+
+--- Reset para nuevo intento de conexión
+function Client:reset()
+    self.connectionState = self.STATE_IDLE
+    self.connectionAttempts = 0
+    self.retryDelay = 1
+    self.socket = nil
+    self.errorMessage = nil
+    self.connected = false
 end
 
 return Client

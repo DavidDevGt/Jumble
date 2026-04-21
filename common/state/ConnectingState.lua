@@ -47,9 +47,10 @@ function ConnectingState:update(dt)
             return "playing"
         end
         
-        -- Verificar timeout
-        if self.elapsed > NetworkConfig.CONNECTION_TIMEOUT then
-            Logger:warn("CONNECTING", "Timeout de conexión")
+        -- Verificar si falló la conexión
+        local connectionState = self.client:getConnectionState()
+        if connectionState == "failed" then
+            Logger:warn("CONNECTING", "Conexión fallida: " .. tostring(self.client:getErrorMessage()))
             return "connection_failed"
         end
     end
