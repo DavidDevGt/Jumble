@@ -7,8 +7,12 @@ GameState.__index = GameState
 local Player = require("common.entities.Player")
 local GameConfig = require("common.config.GameConfig")
 
-function GameState:new()
+function GameState:new(physicsWorld, config)
     local self = setmetatable({}, GameState)
+    
+    -- Inyectar dependencias
+    self.physicsWorld = physicsWorld or error("GameState requires physics world")
+    self.config = config or require("common.config.GameConfig")
     
     self.players = {}
     self.entities = {}
@@ -47,10 +51,15 @@ function GameState:applyInput(clientId, inputVector)
 end
 
 function GameState:tick(dt)
+    -- CRITICAL: Usar fixed timestep physics para determinismo
+    if self.physicsWorld then
+        self.physicsWorld:tick(dt, 8, 3)
+    end
+    
     -- Actualizar cada entidad
     for _, entity in ipairs(self.entities) do
         if entity.update then
-            entity:update(dt, GameConfig.GRAVITY)
+            entity:update(dt, self.config.GRAVITY)
         end
     end
     

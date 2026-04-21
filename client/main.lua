@@ -10,6 +10,10 @@ _G.client = nil
 _G.inputManager = nil
 _G.renderer = nil
 _G.gameStateMachine = nil
+_G.physicsWorld = nil
+
+-- Physics tracking para fixed timestep
+local physicsAccumulator = 0
 
 -- Para logging estructurado
 Logger:setMinLevel(Logger.LEVEL_DEBUG)
@@ -59,6 +63,12 @@ function love.load()
     collectgarbage("setstepmul", 200)
     Logger:debug("GC", "GC tuned: pause=110, stepmul=200")
     
+    -- Inicializar física determinista
+    local DeterministicPhysics = require("common.physics.DeterministicPhysics")
+    _G.physicsWorld = DeterministicPhysics:new(GameConfig.GRAVITY, false)
+    physicsAccumulator = 0
+    Logger:debug("PHYSICS", "Physics initialized with gravity=" .. GameConfig.GRAVITY)
+    
     -- Inicializar sistemas globales
     _G.client = require("client.network.Client"):new()
     _G.inputManager = require("client.network.InputManager"):new()
@@ -85,6 +95,17 @@ end
 function love.update(dt)
     -- Limitar dt para evitar grandes saltos
     dt = math.min(dt, 0.05)
+    
+    -- CRITICAL: Física con fixed timestep para determinismo
+    if _G.physicsWorld then
+        physicsAccumulator = physicsAccumulator + dt
+        
+        while physicsAccumulator >= GameConfig.TICK_TIME do
+            -- Actualizar física con timestep FIJO
+            _G.physicsWorld:tick(GameConfig.TICK_TIME, 8, 3)
+            physicsAccumulator = physicsAccumulator - GameConfig.TICK_TIME
+        end
+    end
     
     -- Actualizar máquina de estados
     if _G.gameStateMachine then
