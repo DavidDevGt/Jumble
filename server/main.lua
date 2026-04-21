@@ -1,6 +1,10 @@
 -- server/main.lua
 -- Punto de entrada del servidor
 
+-- Permite `require("sock")`, `require("bitser")` sin prefijo libs.
+-- Los patrones resuelven libs/<name>.lua y libs/<name>/<name>.lua.
+package.path = package.path .. ";libs/?.lua;libs/?/?.lua"
+
 function love.load()
     -- Cargar configuración
     local GameConfig = require("common.config.GameConfig")

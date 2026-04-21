@@ -8,8 +8,8 @@ local MessageTypes = require("common.protocol.MessageTypes")
 local NetworkConfig = require("common.config.NetworkConfig")
 local Logger = require("common.utils.Logger")
 
--- Cargar bitser para serialización compacta
-local bitser = require("libs.bitser")
+-- Cargar bitser para serialización compacta (resuelto via package.path extendido en client/main.lua)
+local bitser = require("bitser")
 
 function Client:new()
     local self = setmetatable({}, Client)
