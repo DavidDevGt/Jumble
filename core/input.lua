@@ -13,11 +13,15 @@ Input.mouseReleased = {}
 Input.touchesActive = {}
 Input.joysticksActive = {}
 
+local function clearTable(t)
+    for k in pairs(t) do t[k] = nil end
+end
+
 function Input.update(dt)
-    Input.keysPressed = {}
-    Input.keysReleased = {}
-    Input.mousePressed = {}
-    Input.mouseReleased = {}
+    clearTable(Input.keysPressed)
+    clearTable(Input.keysReleased)
+    clearTable(Input.mousePressed)
+    clearTable(Input.mouseReleased)
 end
 
 function Input.isKeyDown(key)
