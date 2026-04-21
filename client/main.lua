@@ -52,22 +52,22 @@ end
 function initPhysics()
     -- Crear mundo de física
     _G.physicsWorld = love.physics.newWorld(0, GameConfig.GRAVITY, true)
-    
+
     -- Suelo
-    _G.groundBody = physicsWorld:newBody(0, GameConfig.WORLD_HEIGHT - 20)
-    _G.groundShape = physicsWorld:newRectangleShape(0, 0, GameConfig.WORLD_WIDTH, 40)
-    _G.groundFixture = physicsWorld:newFixture(groundBody, groundShape, 1)
+    _G.groundBody = love.physics.newBody(physicsWorld, 0, GameConfig.WORLD_HEIGHT - 20)
+    _G.groundShape = love.physics.newRectangleShape(0, 0, GameConfig.WORLD_WIDTH, 40)
+    _G.groundFixture = love.physics.newFixture(groundBody, groundShape, 1)
     groundBody:setFixedRotation(true)
-    
-    -- Paretes
-    local leftWall = physicsWorld:newBody(-20, GameConfig.WORLD_HEIGHT/2)
-    local leftShape = physicsWorld:newRectangleShape(0, 0, 40, GameConfig.WORLD_HEIGHT)
-    physicsWorld:newFixture(leftWall, leftShape, 1)
-    
-    local rightWall = physicsWorld:newBody(GameConfig.WORLD_WIDTH + 20, GameConfig.WORLD_HEIGHT/2)
-    local rightShape = physicsWorld:newRectangleShape(0, 0, 40, GameConfig.WORLD_HEIGHT)
-    physicsWorld:newFixture(rightWall, rightShape, 1)
-    
+
+    -- Paredes
+    local leftWall = love.physics.newBody(physicsWorld, -20, GameConfig.WORLD_HEIGHT/2)
+    local leftShape = love.physics.newRectangleShape(0, 0, 40, GameConfig.WORLD_HEIGHT)
+    love.physics.newFixture(leftWall, leftShape, 1)
+
+    local rightWall = love.physics.newBody(physicsWorld, GameConfig.WORLD_WIDTH + 20, GameConfig.WORLD_HEIGHT/2)
+    local rightShape = love.physics.newRectangleShape(0, 0, 40, GameConfig.WORLD_HEIGHT)
+    love.physics.newFixture(rightWall, rightShape, 1)
+
     -- Inicializar jugadores locales
     initLocalPlayer()
 end
@@ -90,9 +90,9 @@ function initLocalPlayer()
     }
     
     -- Crear body de física para el jugador
-    player.body = physicsWorld:newBody(player.x, player.y, "dynamic")
-    player.shape = physicsWorld:newRectangleShape(0, 0, player.width, player.height)
-    player.fixture = physicsWorld:newFixture(player.body, player.shape, 1)
+    player.body = love.physics.newBody(physicsWorld, player.x, player.y, "dynamic")
+    player.shape = love.physics.newRectangleShape(0, 0, player.width, player.height)
+    player.fixture = love.physics.newFixture(player.body, player.shape, 1)
     player.body:setFixedRotation(true)
     player.body:setLinearDamping(10)
     
@@ -127,9 +127,9 @@ function updateLocalPlayer(dt)
     -- Obtener input
     local input = inputManager:getInput()
     
-    -- Aplicar movimiento horizontal
-    local moveForce = GameConfig.PLAYER_SPEED * 50 -- Force para Box2D
-    player.body:applyForceToCenter(input.x * moveForce, 0, true)
+    -- Aplicar movimiento horizontal (applyForce sin x/y aplica al centro de masa)
+    local moveForce = GameConfig.PLAYER_SPEED * 50
+    player.body:applyForce(input.x * moveForce, 0)
     
     -- Saltar
     if inputManager.inputState.jump and player.isGrounded then
