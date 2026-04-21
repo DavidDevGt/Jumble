@@ -2,6 +2,18 @@
 
 Estos cambios pueden implementarse **inmediatamente** (hoy mismo) sin refactor arquitectónico.
 
+## Status
+
+Los cinco Quick Wins originales ya están mergeados a `dev` vía PR #1:
+
+- [x] **QW#1** — Broadcast buffer pooling en `Server.lua`
+- [x] **QW#2** — Input table pooling en `core/input.lua` (implementado con `pairs`, no `ipairs` como decía la receta — las tablas están indexadas por nombre de tecla/botón, no por índice)
+- [x] **QW#3** — Structured logging en `common/utils/Logger.lua` (también corrigió una inversión del nivel de gate: antes `setLevel(WARN)` silenciaba errores)
+- [x] **QW#4** — Rate limiting con constante nombrada `NetworkConfig.MIN_TICKS_BETWEEN_INPUTS`
+- [x] **QW#5** — GC tuning (`setpause 110` / `setstepmul 200`) en `main.lua` y `server/main.lua`
+
+El resto del documento queda como la receta original para referencia / auditoría.
+
 ---
 
 ## QUICK WIN #1: Memory Allocations Buffer Pooling - 30 minutos
