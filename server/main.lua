@@ -2,6 +2,11 @@
 -- Punto de entrada del servidor
 
 function love.load()
+    -- GC tuning: trigger earlier (pause=110) and step aggressively to
+    -- smooth frame times. See docs/QUICK_WINS.md QW#5.
+    collectgarbage("setpause", 110)
+    collectgarbage("setstepmul", 200)
+
     -- Cargar configuración
     local GameConfig = require("common.config.GameConfig")
     local Logger = require("common.utils.Logger")
@@ -34,18 +39,18 @@ function love.update(dt)
     -- Procesar conexiones
     server:update(dt)
     
-    -- Actualizar física y lógica
+    -- Actualizar física y lógica (solo el servidor tiene autoridad)
     SERVER_STATE.accumulator = SERVER_STATE.accumulator + dt
     
     local GameConfig = require("common.config.GameConfig")
     while SERVER_STATE.accumulator >= GameConfig.TICK_TIME do
         SERVER_STATE.accumulator = SERVER_STATE.accumulator - GameConfig.TICK_TIME
         
-        -- Tick determinista del servidor
+        -- Tick determinista del servidor (ÚNICA autoridad de física)
         gameState:tick(GameConfig.TICK_TIME)
         
-        -- Broadcast estado
-        server:broadcastGameState(gameState:getState())
+        -- Broadcast estado cada 3 ticks (20Hz)
+        server:broadcastGameState(gameState:getState(), SERVER_STATE.tick)
         
         SERVER_STATE.tick = SERVER_STATE.tick + 1
     end
@@ -55,7 +60,7 @@ function love.draw()
     -- El servidor no renderiza
     love.graphics.clear(0.05, 0.05, 0.05)
     love.graphics.setColor(1, 1, 1)
-    love.graphics.printf("SERVER MODE", 0, 360, 1280, "center")
+    love.graphics.printf("SERVER MODE - Tick: " .. tostring(SERVER_STATE.tick), 0, 360, 1280, "center")
 end
 
 function love.keypressed(key)

@@ -58,3 +58,6 @@ config.local.lua
 secrets.lua
 .env
 *.key
+
+# Dependencias externas (cada dev las clona localmente según SETUP.md)
+libs/

@@ -8,21 +8,28 @@ local MessageTypes = require("common.protocol.MessageTypes")
 local NetworkConfig = require("common.config.NetworkConfig")
 local Logger = require("common.utils.Logger")
 
+-- Cargar bitser para serialización compacta
+local bitser = require("libs.bitser")
+
 function Server:new()
     local self = setmetatable({}, Server)
-    
+
     self.socket = nil
     self.clients = {}
     self.nextClientId = 1
-    
+    self.lastBroadcastTick = 0
+    -- Buffer reutilizado en broadcastGameState para evitar 1 alloc por broadcast.
+    self.broadcastBuffer = {}
+
     return self
 end
 
 function Server:start()
-    Logger:info("SERVER", "Iniciando socket en puerto " .. NetworkConfig.SERVER_PORT)
+    Logger:info("SERVER", "Iniciando socket UDP en puerto " .. NetworkConfig.SERVER_PORT)
     
-    -- En producción, usar sock.lua
-    -- self.socket = require("sock").newServer(...)
+    -- Forzar UDP con sock.lua
+    self.socket = require("sock").newServer("*", NetworkConfig.SERVER_PORT)
+    self.socket:setTimeout(0)
 end
 
 function Server:update(dt)
@@ -32,17 +39,21 @@ function Server:update(dt)
     end
     
     -- Procesar conexiones entrantes
-    -- local client, err = self.socket:accept()
-    -- if client then
-    --     self:handleNewClient(client)
-    -- end
+    local clientSocket = self.socket:accept()
+    if clientSocket then
+        self:handleNewClient(clientSocket)
+    end
     
     -- Procesar paquetes de clientes
     for clientId, client in pairs(self.clients) do
-        -- local data, err = client:receive()
-        -- if data then
-        --     self:handleClientPacket(clientId, data)
-        -- end
+        local data = client.socket:receive()
+        while data do
+            local ok, packet = pcall(bitser.deserialize, data)
+            if ok and packet then
+                self:handleClientPacket(clientId, packet)
+            end
+            data = client.socket:receive()
+        end
     end
 end
 
@@ -54,7 +65,8 @@ function Server:handleNewClient(socket)
         id = clientId,
         socket = socket,
         player = nil,
-        lastInputTime = love.timer.getTime()
+        lastInputTime = 0,
+        lastInputTick = 0
     }
     
     self.clients[clientId] = client
@@ -65,59 +77,98 @@ function Server:handleClientPacket(clientId, data)
     local client = self.clients[clientId]
     if not client then return end
     
-    if data.type == MessageTypes.CONNECT then
+    local msgType = data.type or data[1]
+    
+    if msgType == MessageTypes.CONNECT then
         self:handleConnect(clientId, data)
-    elseif data.type == MessageTypes.INPUT then
+    elseif msgType == MessageTypes.INPUT then
         self:handleInput(clientId, data)
+    elseif msgType == MessageTypes.PING then
+        self:handlePing(clientId, data)
     end
 end
 
 function Server:handleConnect(clientId, data)
-    Logger:info("SERVER", "Cliente " .. clientId .. " intentando conectar")
+    Logger:info("SERVER", "Cliente " .. clientId .. " conectado")
     
+    -- Asignar ID único
+    local client = self.clients[clientId]
+    client.playerId = clientId
+    
+    -- Responder con accepted
     local response = {
         type = MessageTypes.CONNECT_RESPONSE,
         clientId = clientId,
         status = "accepted"
     }
     
-    self:sendToClient(clientId, response)
+    self:sendToClient(clientId, bitser.serialize(response))
 end
 
 function Server:handleInput(clientId, data)
-    -- Validar input
     local client = self.clients[clientId]
     if not client then return end
     
-    -- Validar rate limiting
-    local now = love.timer.getTime()
-    if (now - client.lastInputTime) < (1 / NetworkConfig.MAX_INPUT_RATE) then
-        Logger:warn("SERVER", "Input rate limit excedido para cliente " .. clientId)
+    -- Rate limit: max 1 input cada MIN_TICKS_BETWEEN_INPUTS ticks del servidor.
+    local currentTick = SERVER_STATE.tick
+    local ticksSinceLastInput = currentTick - client.lastInputTick
+    if ticksSinceLastInput < NetworkConfig.MIN_TICKS_BETWEEN_INPUTS then
+        return
+    end
+
+    client.lastInputTick = currentTick
+    
+    -- Enviar input al GameState para procesamiento
+    if data.input and gameState then
+        gameState:applyInput(clientId, data.input)
+    end
+end
+
+function Server:handlePing(clientId, data)
+    local response = {
+        type = MessageTypes.PONG,
+        timestamp = data.timestamp,
+        serverTick = SERVER_STATE.tick
+    }
+    self:sendToClient(clientId, bitser.serialize(response))
+end
+
+-- Enviar STATE_UPDATE cada 3 ticks (20Hz cuando tick=60)
+function Server:broadcastGameState(state, tick)
+    -- Solo enviar cada 3 ticks = 20Hz
+    if tick % 3 ~= 0 then
         return
     end
     
-    client.lastInputTime = now
-    
-    -- Procesar input en el servidor
-    -- gameState:applyInput(clientId, data.inputVector)
-end
+    -- Serializar solo datos mínimos reutilizando el buffer.
+    local buffer = self.broadcastBuffer
+    for i = #buffer, 1, -1 do buffer[i] = nil end
 
-function Server:broadcastGameState(state)
+    local n = 0
+    for _, entity in ipairs(state) do
+        if entity.getNetworkState then
+            n = n + 1
+            buffer[n] = entity:getNetworkState()
+        end
+    end
+
     local packet = {
         type = MessageTypes.STATE_UPDATE,
-        tick = SERVER_STATE.tick,
-        entities = state
+        tick = tick,
+        entities = buffer
     }
     
+    local serialized = bitser.serialize(packet)
+    
     for clientId, _ in pairs(self.clients) do
-        self:sendToClient(clientId, packet)
+        self:sendToClient(clientId, serialized)
     end
 end
 
 function Server:sendToClient(clientId, data)
     local client = self.clients[clientId]
     if client and client.socket then
-        -- client.socket:send(data)
+        client.socket:send(data)
     end
 end
 
