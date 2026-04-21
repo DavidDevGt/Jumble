@@ -19,6 +19,9 @@ function Server:new()
     self.nextClientId = 1
     self.lastBroadcastTick = 0
     
+    -- Buffer pooling para optimización de memoria (QUICK WIN #1)
+    self.broadcastBuffer = {}  -- Reutilizable en lugar de crear tabla nueva cada broadcast
+    
     return self
 end
 
@@ -138,18 +141,23 @@ function Server:broadcastGameState(state, tick)
         return
     end
     
+    -- QUICK WIN #1: Buffer pooling - reutilizar tabla en lugar de crear nueva
+    -- Limpiar buffer (no recrear)
+    for i in ipairs(self.broadcastBuffer) do
+        self.broadcastBuffer[i] = nil
+    end
+    
     -- Serializar solo datos mínimos
-    local minimalEntities = {}
     for _, entity in ipairs(state) do
         if entity.getNetworkState then
-            table.insert(minimalEntities, entity:getNetworkState())
+            table.insert(self.broadcastBuffer, entity:getNetworkState())
         end
     end
     
     local packet = {
         type = MessageTypes.STATE_UPDATE,
         tick = tick,
-        entities = minimalEntities
+        entities = self.broadcastBuffer
     }
     
     local serialized = bitser.serialize(packet)
