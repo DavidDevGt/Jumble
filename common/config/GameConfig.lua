@@ -14,8 +14,8 @@ GameConfig.PLAYER_SPEED = 200       -- píxeles/segundo
 GameConfig.PLAYER_MAX_SPEED = 250
 
 -- FÍSICA
-GameConfig.GRAVITY = 800            -- píxeles/segundo²
-GameConfig.JUMP_FORCE = 400
+GameConfig.GRAVITY = 800            -- píxeles/segundo² hacia abajo
+GameConfig.JUMP_FORCE = 150000         -- fuerza de salto para Box2D (depende de masa)
 
 -- NETWORKING
 GameConfig.TICK_RATE = 60           -- Updates por segundo

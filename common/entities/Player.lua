@@ -80,4 +80,29 @@ function Player:respawn(x, y)
     self.state = "idle"
 end
 
+-- Solo datos mínimos para red (no enviar objeto completo)
+function Player:getNetworkState()
+    return {
+        id = self.id,
+        x = math.floor(self.position.x),        -- integer
+        y = math.floor(self.position.y),        -- integer
+        vx = math.floor(self.velocity.x),    -- integer
+        vy = math.floor(self.velocity.y),      -- integer
+        state = self.state                    -- enumstring
+    }
+end
+
+-- Estados para red (enum)
+Player.NETWORK_STATES = {
+    IDLE = 0,
+    RUNNING = 1,
+    JUMPING = 2,
+    FALLING = 3,
+    DEAD = 4
+}
+
+function Player:getNetworkStateEnum()
+    return Player.NETWORK_STATES[self:state()] or 0
+end
+
 return Player

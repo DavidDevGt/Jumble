@@ -53,6 +53,14 @@ function Vector2:clone()
     return Vector2:new(self.x, self.y)
 end
 
+function Vector2:x()
+    return self.x
+end
+
+function Vector2:y()
+    return self.y
+end
+
 function Vector2:__tostring()
     return string.format("Vector2(%.1f, %.1f)", self.x, self.y)
 end
