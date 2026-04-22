@@ -2,6 +2,10 @@
 -- Punto de entrada del cliente - Jumble
 -- Modo single-player con física local para testing
 
+-- Permite `require("sock")`, `require("bitser")` sin prefijo libs.
+-- Los patrones resuelven libs/<name>.lua y libs/<name>/<name>.lua.
+package.path = package.path .. ";libs/?.lua;libs/?/?.lua"
+
 local GameConfig = require("common.config.GameConfig")
 local Logger = require("common.utils.Logger")
 
