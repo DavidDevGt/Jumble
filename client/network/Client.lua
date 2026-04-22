@@ -1,65 +1,74 @@
 -- client/network/Client.lua
--- Gestor de conexión del cliente
+-- Gestor de conexión del cliente sobre sock.lua (enet UDP).
+--
+-- La recepción de mensajes se hace vía callbacks registrados con
+-- client:on(event, cb). `update()` procesa los eventos enet pendientes
+-- y dispara los callbacks correspondientes.
 
 local Client = {}
 Client.__index = Client
 
-local MessageTypes = require("common.protocol.MessageTypes")
 local NetworkConfig = require("common.config.NetworkConfig")
-local Logger = require("common.utils.Logger")
+local Logger        = require("common.utils.Logger")
 
--- Cargar bitser para serialización compacta (resuelto via package.path extendido en client/main.lua)
+local sock   = require("sock")
 local bitser = require("bitser")
 
 function Client:new()
     local self = setmetatable({}, Client)
-    
+
     self.connected = false
     self.clientId = nil
     self.socket = nil
     self.serverHost = NetworkConfig.SERVER_HOST
     self.serverPort = NetworkConfig.SERVER_PORT
-    self.connectionTime = 0
-    self.lastSendTime = 0
-    
-    -- Buffer de interpolación
+
+    -- Buffer de estados de entidades para interpolación.
     self.entityStates = {}
-    self.pendingInputs = {}
-    
+
     return self
 end
 
 function Client:connect()
-    if self.connected then return end
-    
-    self.connectionTime = self.connectionTime + love.timer.getDelta()
-    
-    if self.connectionTime > NetworkConfig.CONNECTION_TIMEOUT then
-        Logger:warn("CLIENT", "Timeout de conexión")
-        self.connectionTime = 0
-        return
-    end
-    
-    if not self.socket then
-        Logger:info("CLIENT", "Conectando a " .. 
-                             self.serverHost .. ":" .. self.serverPort .. " (UDP)")
-        
-        -- Forzar UDP con sock.lua
-        self.socket = require("sock").newClient(self.serverHost, self.serverPort)
-        self.socket:setTimeout(0)
-        self.socket:setBroadcast(true)
-    end
-    
-    -- Intentar handshake
-    local connectPacket = {
-        type = MessageTypes.CONNECT,
-        timestamp = love.timer.getTime()
-    }
-    
-    local success, err = self.socket:send(bitser.serialize(connectPacket))
-    if not success then
-        Logger:warn("CLIENT", "Error al enviar CONNECT: " .. tostring(err))
-    end
+    if self.socket then return end
+
+    Logger:info("CLIENT", "Conectando a " .. self.serverHost .. ":" .. self.serverPort .. " (UDP)")
+
+    self.socket = sock.newClient(self.serverHost, self.serverPort)
+    self.socket:setSerialization(bitser.dumps, bitser.loads)
+
+    self.socket:on("connect", function()
+        -- Nota: esto dispara cuando el transporte enet se conecta. El
+        -- estado "connected" de la app se marca al recibir "welcome",
+        -- donde el servidor nos asigna un clientId.
+        Logger:info("CLIENT", "Transporte conectado al servidor")
+    end)
+
+    self.socket:on("disconnect", function()
+        Logger:warn("CLIENT", "Desconectado del servidor")
+        self.connected = false
+        self.clientId = nil
+    end)
+
+    self.socket:on("welcome", function(data)
+        if data and data.status == "accepted" then
+            self.clientId = data.clientId
+            self.connected = true
+            Logger:info("CLIENT", "Conectado con ID: " .. tostring(self.clientId))
+        else
+            Logger:warn("CLIENT", "Bienvenida rechazada por el servidor")
+        end
+    end)
+
+    self.socket:on("state_update", function(data)
+        self:handleStateUpdate(data)
+    end)
+
+    self.socket:on("pong", function(data)
+        -- TODO: calcular latencia a partir de data.timestamp
+    end)
+
+    self.socket:connect()
 end
 
 function Client:isConnected()
@@ -67,85 +76,45 @@ function Client:isConnected()
 end
 
 function Client:update(dt)
-    if not self.connected then 
+    if not self.socket then
         self:connect()
-        return 
+        return
     end
-    
-    if not self.socket then return end
-    
-    -- Procesar paquetes recibidos
-    local data, msg = self.socket:receive()
-    if data then
-        local ok, packet = pcall(bitser.deserialize, data)
-        if ok and packet then
-            self:handlePacket(packet)
-        end
-    end
-    
-    -- Reenviar inputs pendientes si no hay ack
-    self:resendPendingInputs()
+    self.socket:update()
 end
 
 function Client:sendInput(input)
-    if not self.connected then return end
-    
-    if not self.socket then return end
-    
-    -- Serializar input compacto (booleanos, no vector)
-    local packet = {
-        type = MessageTypes.INPUT,
+    if not self.connected or not self.socket then return end
+
+    self.socket:send("input", {
         clientId = self.clientId,
-        input = input,  -- Vector2 o tabla {x, y, jump}
-        timestamp = love.timer.getTime()
-    }
-    
-    local serialized = bitser.serialize(packet)
-    self.socket:send(serialized)
+        input = input,
+        timestamp = love.timer.getTime(),
+    })
 end
 
-function Client:handlePacket(data)
-    local msgType = data.type or data[1]
-    
-    if msgType == MessageTypes.CONNECT_RESPONSE then
-        self:handleConnectResponse(data)
-    elseif msgType == MessageTypes.STATE_UPDATE then
-        self:handleStateUpdate(data)
-    elseif msgType == MessageTypes.PONG then
-        -- Actualizar latencia
-    end
-end
-
-function Client:handleConnectResponse(data)
-    if data.status == "accepted" then
-        self.clientId = data.clientId
-        self.connected = true
-        Logger:info("CLIENT", "Conectado con ID: " .. self.clientId)
-    end
+function Client:ping()
+    if not self.connected or not self.socket then return end
+    self.socket:send("ping", { timestamp = love.timer.getTime() })
 end
 
 function Client:handleStateUpdate(data)
-    -- Guardar estado para interpolación
-    if data.tick and data.entities then
-        for _, entity in ipairs(data.entities) do
-            self.entityStates[entity.id] = {
-                x = entity.x,
-                y = entity.y,
-                vx = entity.vx,
-                vy = entity.vy,
-                state = entity.state,
-                tick = data.tick
-            }
-        end
+    if not (data and data.tick and data.entities) then return end
+
+    for _, entity in ipairs(data.entities) do
+        self.entityStates[entity.id] = {
+            x = entity.x,
+            y = entity.y,
+            vx = entity.vx,
+            vy = entity.vy,
+            state = entity.state,
+            tick = data.tick,
+        }
     end
 end
 
 function Client:getEntityState(id)
     return self.entityStates[id]
-end
-
-function Client:resendPendingInputs()
-    -- Implementar si necesitamos reliable delivery para inputs
 end
 
 return Client
