@@ -9,13 +9,20 @@ package.path = package.path .. ";libs/?.lua;libs/?/?.lua"
 local GameConfig = require("common.config.GameConfig")
 local Logger     = require("common.utils.Logger")
 
--- Tuning local de controles. GameConfig.JUMP_FORCE=150000 es inusable
--- (salto de escape velocity); acá calibramos para un salto parabólico
--- de ~260px con GRAVITY=800: v = sqrt(2*g*h) ≈ 632.
-local JUMP_IMPULSE_VELOCITY = 650
-local GOAL_TOUCH_DISTANCE   = 45
-local FAIL_COUNTDOWN        = 3.0  -- segundos que se muestra el overlay "FALLASTE" antes de reiniciar
-local FALL_DEATH_Y          = GameConfig.WORLD_HEIGHT + 100 -- bajando de aquí = caída al vacío
+-- Tuning de controles. Priorizamos control "apretado" estilo Pico Park /
+-- Celeste: el salto responde al tap (velocidad directa, sin impulso-por-
+-- masa), y la caída es más rápida que la subida para que el airtime no
+-- se sienta "flotante".
+--
+-- Con JUMP_VELOCITY=500 y GRAVITY=800: altura máx ~156px, tiempo de subida
+-- 0.625s. Con FALL_GRAVITY_MULT=1.8 el tiempo de caída es 0.47s. Total
+-- airtime ~1.1s (antes: impulso 650 + damping = ~1.6s).
+local JUMP_VELOCITY       = 500   -- pixels/seg hacia arriba (al tap)
+local JUMP_CUT_FACTOR     = 0.40  -- al soltar SPACE durante subida: vy *= esto
+local FALL_GRAVITY_MULT   = 1.8   -- gravedad extra al caer (vy>0) para snap
+local GOAL_TOUCH_DISTANCE = 45
+local FAIL_COUNTDOWN      = 3.0   -- segundos del overlay "FALLASTE" antes de reiniciar
+local FALL_DEATH_Y        = GameConfig.WORLD_HEIGHT + 100 -- bajando de aquí = caída al vacío
 
 GAME_STATE    = nil
 physicsWorld  = nil
@@ -43,41 +50,48 @@ PLAYER_COLORS = {
 --
 -- Todo lo que no sea plataforma = vacío. Caerse = fail.
 
+-- Convenciones de diseño:
+--   - h=30 en todas las plataformas (más presencia visual que el h=20 previo).
+--   - w mínimo = 140 (4.4x el player). Menos ancho que eso, el player se
+--     ve "flotando" sobre el borde.
+--   - Vertical gap máximo ~120px (reachable con JUMP_VELOCITY=500, g=800 → ~156px de tope).
+--   - Horizontal gap ~180-200px como máximo (player a 200px/s × airtime).
+
 local function createLevel1()
     return {
         name     = "Nivel 1 - Ascenso",
-        spawn    = { x = 110, y = 790 },
+        spawn    = { x = 140, y = 785 },
         platforms = {
-            { x = 20,   y = 820, w = 220, h = 20 },   -- SPAWN
-            { x = 320,  y = 740, w = 140, h = 20 },
-            { x = 540,  y = 650, w = 140, h = 20 },
-            { x = 340,  y = 560, w = 140, h = 20 },
-            { x = 600,  y = 470, w = 180, h = 20 },
-            { x = 880,  y = 380, w = 180, h = 20 },
-            { x = 1180, y = 280, w = 240, h = 20 },   -- GOAL platform
+            { x = 20,   y = 815, w = 260, h = 30 },   -- SPAWN (ancha, sin stress)
+            { x = 340,  y = 715, w = 160, h = 30 },
+            { x = 560,  y = 620, w = 160, h = 30 },
+            { x = 340,  y = 520, w = 160, h = 30 },
+            { x = 600,  y = 420, w = 180, h = 30 },
+            { x = 880,  y = 330, w = 180, h = 30 },
+            { x = 1180, y = 240, w = 300, h = 30 },   -- GOAL platform (ancha)
         },
-        goal = { x = 1260, y = 220, w = 60, h = 60 },
+        goal = { x = 1290, y = 180, w = 60, h = 60 },
     }
 end
 
--- Nivel 2: plataformas más chicas, gaps más largos. Exige precisión
--- de salto y timing al girarse en el aire.
+-- Nivel 2: plataformas todavía anchas pero gaps un poco más largos.
+-- Exige precisión pero no hay edge-hanging sospechoso.
 local function createLevel2()
     return {
         name     = "Nivel 2 - Precisión",
-        spawn    = { x = 100, y = 790 },
+        spawn    = { x = 130, y = 785 },
         platforms = {
-            { x = 20,   y = 820, w = 180, h = 20 },   -- SPAWN
-            { x = 280,  y = 740, w = 90,  h = 20 },
-            { x = 110,  y = 650, w = 90,  h = 20 },
-            { x = 320,  y = 560, w = 90,  h = 20 },
-            { x = 540,  y = 490, w = 100, h = 20 },
-            { x = 770,  y = 420, w = 90,  h = 20 },
-            { x = 980,  y = 360, w = 90,  h = 20 },
-            { x = 1180, y = 290, w = 100, h = 20 },
-            { x = 1370, y = 210, w = 200, h = 20 },   -- GOAL platform
+            { x = 20,   y = 815, w = 220, h = 30 },   -- SPAWN
+            { x = 310,  y = 720, w = 140, h = 30 },
+            { x = 120,  y = 620, w = 140, h = 30 },
+            { x = 330,  y = 520, w = 140, h = 30 },
+            { x = 560,  y = 440, w = 150, h = 30 },
+            { x = 790,  y = 360, w = 140, h = 30 },
+            { x = 990,  y = 290, w = 140, h = 30 },
+            { x = 1200, y = 220, w = 150, h = 30 },
+            { x = 1380, y = 140, w = 220, h = 30 },   -- GOAL platform
         },
-        goal = { x = 1450, y = 150, w = 60, h = 60 },
+        goal = { x = 1450, y = 80,  w = 60, h = 60 },
     }
 end
 
@@ -135,21 +149,19 @@ function initPhysics()
 
     -- No hay suelo full-width. Cada nivel define su propio spawn platform
     -- como primera entrada en `platforms`. Todo lo que no es plataforma = vacío.
-    -- Solo quedan las paredes, que centran el cuadro de juego y evitan que
-    -- el player escape lateralmente (termina cayendo igual por las esquinas).
     --
-    -- Body en (x=pos, y=WORLD_HEIGHT/2) con shape centrado: physics y visual
-    -- coinciden (cubren el ancho completo en Y, solapados con el borde de
-    -- ventana). Antes el suelo tenía un bug — body en X=0 con shape ancho
-    -- 1600 centrado dejaba el shape cubriendo X=-800..800 mientras el draw
-    -- lo pintaba en X=0..1600. De ahí el "piso fantasma" desde X=800.
-    local leftWall = love.physics.newBody(physicsWorld, -20, GameConfig.WORLD_HEIGHT/2)
+    -- Paredes: physics y visual coinciden. Visualmente se pintan en X=0..20
+    -- (izquierda) y X=WORLD_WIDTH-20..WORLD_WIDTH (derecha). Los bodies se
+    -- centran dentro de esas franjas con shape 20xH, así el player choca
+    -- justo donde se ve la pared y no puede "clippar" dentro de ella.
+    local wallThickness = 20
+    local leftWall = love.physics.newBody(physicsWorld, wallThickness/2, GameConfig.WORLD_HEIGHT/2)
     love.physics.newFixture(leftWall,
-        love.physics.newRectangleShape(0, 0, 40, GameConfig.WORLD_HEIGHT), 1)
+        love.physics.newRectangleShape(0, 0, wallThickness, GameConfig.WORLD_HEIGHT), 1)
 
-    local rightWall = love.physics.newBody(physicsWorld, GameConfig.WORLD_WIDTH + 20, GameConfig.WORLD_HEIGHT/2)
+    local rightWall = love.physics.newBody(physicsWorld, GameConfig.WORLD_WIDTH - wallThickness/2, GameConfig.WORLD_HEIGHT/2)
     love.physics.newFixture(rightWall,
-        love.physics.newRectangleShape(0, 0, 40, GameConfig.WORLD_HEIGHT), 1)
+        love.physics.newRectangleShape(0, 0, wallThickness, GameConfig.WORLD_HEIGHT), 1)
 end
 
 function loadLevel(levelData)
@@ -169,16 +181,17 @@ end
 
 function spawnLocalPlayer(x, y)
     local player = {
-        id         = 1,
-        name       = "P1",
-        x          = x,
-        y          = y,
-        vx         = 0,
-        vy         = 0,
-        width      = GameConfig.PLAYER_WIDTH,
-        height     = GameConfig.PLAYER_HEIGHT,
-        isGrounded = false,
-        color      = PLAYER_COLORS[1],
+        id           = 1,
+        name         = "P1",
+        x            = x,
+        y            = y,
+        vx           = 0,
+        vy           = 0,
+        width        = GameConfig.PLAYER_WIDTH,
+        height       = GameConfig.PLAYER_HEIGHT,
+        isGrounded   = false,
+        jumpWasHeld  = false,  -- para detectar release y aplicar jump cut
+        color        = PLAYER_COLORS[1],
     }
 
     player.body    = love.physics.newBody(physicsWorld, x, y, "dynamic")
@@ -299,22 +312,45 @@ function updateLocalPlayer(dt)
 
     checkGrounded(player)
 
-    -- Movimiento horizontal: velocidad directa preserva vy para la física
-    -- vertical (gravedad, salto, caída). Feel estilo platformer clásico.
-    local input = inputManager:getInput()
-    local _, vy = player.body:getLinearVelocity()
-    player.body:setLinearVelocity(input.x * GameConfig.PLAYER_SPEED, vy)
+    local input     = inputManager:getInput()
+    local jumpHeld  = inputManager.inputState.jump
+    local jumpPressed  = jumpHeld and not player.jumpWasHeld
+    local jumpReleased = (not jumpHeld) and player.jumpWasHeld
 
-    -- Salto: impulso = masa * deltaV (Box2D). Usamos la constante local
-    -- en vez de GameConfig.JUMP_FORCE (que era 150000, ~200x demasiado).
-    if inputManager.inputState.jump and player.isGrounded then
-        player.body:applyLinearImpulse(0, -JUMP_IMPULSE_VELOCITY * player.body:getMass())
+    local vx, vy = player.body:getLinearVelocity()
+
+    -- Movimiento horizontal: velocidad directa (preserva vy para la gravedad).
+    -- Feel de platformer clásico — instant on/instant off, sin inercia.
+    local newVx = input.x * GameConfig.PLAYER_SPEED
+    local newVy = vy
+
+    -- Jump initiation: al pressionar (no al mantener), seteamos vy directo.
+    -- Velocidad directa en vez de impulso = el salto es tan responsivo como
+    -- el movimiento horizontal. Tap = -JUMP_VELOCITY instantáneo.
+    if jumpPressed and player.isGrounded then
+        newVy = -JUMP_VELOCITY
         player.isGrounded = false
     end
 
-    -- Caída al vacío: dispara shared-fate (el equipo entero reinicia).
-    -- En single-player el "equipo" es este único player, pero el pattern
-    -- ya deja la puerta abierta para la versión network.
+    -- Variable jump cut: si soltaste SPACE mientras estabas subiendo,
+    -- cortamos la velocidad vertical. Tap corto = salto corto, hold = salto
+    -- completo. Le da al jugador control fino de altura.
+    if jumpReleased and newVy < 0 then
+        newVy = newVy * JUMP_CUT_FACTOR
+    end
+
+    player.body:setLinearVelocity(newVx, newVy)
+
+    -- Gravedad extra al caer: hace la bajada más "apretada" — menos
+    -- tiempo en el aire = más control.
+    if newVy > 0 then
+        local extraGravity = GameConfig.GRAVITY * (FALL_GRAVITY_MULT - 1) * player.body:getMass()
+        player.body:applyForce(0, extraGravity)
+    end
+
+    player.jumpWasHeld = jumpHeld
+
+    -- Caída al vacío: dispara shared-fate.
     if player.body:getY() > FALL_DEATH_Y then
         triggerFail("Un jugador cayó al vacío")
         return
