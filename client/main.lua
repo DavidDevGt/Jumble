@@ -14,6 +14,8 @@ local Logger     = require("common.utils.Logger")
 -- de ~260px con GRAVITY=800: v = sqrt(2*g*h) ≈ 632.
 local JUMP_IMPULSE_VELOCITY = 650
 local GOAL_TOUCH_DISTANCE   = 45
+local FAIL_COUNTDOWN        = 3.0  -- segundos que se muestra el overlay "FALLASTE" antes de reiniciar
+local FALL_DEATH_Y          = GameConfig.WORLD_HEIGHT + 100 -- bajando de aquí = caída al vacío
 
 GAME_STATE    = nil
 physicsWorld  = nil
@@ -58,14 +60,25 @@ function love.load()
     Logger:info("JUMBLE", "Inicializando cliente...")
 
     GAME_STATE = {
+        -- Modos: "menu", "playing", "failed", (más adelante: "lobby", "completed")
         mode                 = "menu",
         menuSelection        = 1,
         players              = {},
         localPlayerId        = 1,
         gameTime             = 0,
         currentLevel         = createLevel1(),
+
+        -- Estado del nivel actual
         levelCompleted       = false,
         levelCompletedTimer  = 0,
+
+        -- Shared-fate: si algún jugador cae, todo el equipo reinicia.
+        -- En single-player esto es just-in-time; cuando tengamos network,
+        -- el server emitirá un evento "fail" y todos los clientes
+        -- entrarán acá simultáneamente.
+        failTimer            = 0,
+        failReason           = nil,
+        attempts             = 0,
     }
 
     initPhysics()
@@ -154,8 +167,26 @@ function reloadCurrentLevel()
     GAME_STATE.players             = {}
     GAME_STATE.levelCompleted      = false
     GAME_STATE.levelCompletedTimer = 0
+    GAME_STATE.failTimer           = 0
+    GAME_STATE.failReason          = nil
 
     loadLevel(level)
+end
+
+-- Shared-fate: dispara el overlay de fallo y arranca el countdown para
+-- reiniciar el nivel. En single-player lo llamamos nosotros mismos
+-- (cuando el player cae). Cuando haya network, el server emitirá un
+-- evento "fail" y el callback lo invocará con la misma firma.
+function triggerFail(reason)
+    if GAME_STATE.mode == "failed" or GAME_STATE.levelCompleted then return end
+
+    GAME_STATE.mode       = "failed"
+    GAME_STATE.failTimer  = 0
+    GAME_STATE.failReason = reason or "Un jugador cayó"
+    GAME_STATE.attempts   = GAME_STATE.attempts + 1
+
+    Logger:warn("JUMBLE", "¡Fallaste! Motivo: " .. GAME_STATE.failReason ..
+                          " (intento #" .. GAME_STATE.attempts .. ")")
 end
 
 ----------------------------------------------------------------------
@@ -168,6 +199,19 @@ function love.update(dt)
     -- Procesar eventos enet (incluso durante el menú, así el handshake
     -- con el server arranca apenas abre la ventana).
     client:update(dt)
+
+    if GAME_STATE.mode == "failed" then
+        -- Countdown para reiniciar. Physics sigue corriendo para que el
+        -- player "muerto" no se quede congelado en el aire si estaba
+        -- cayendo (feel más natural que freeze puro).
+        physicsWorld:update(dt)
+        GAME_STATE.failTimer = GAME_STATE.failTimer + dt
+        if GAME_STATE.failTimer >= FAIL_COUNTDOWN then
+            reloadCurrentLevel()
+            GAME_STATE.mode = "playing"
+        end
+        return
+    end
 
     if GAME_STATE.mode ~= "playing" then return end
 
@@ -199,11 +243,12 @@ function updateLocalPlayer(dt)
         player.isGrounded = false
     end
 
-    -- Reset si cae fuera del mundo.
-    if player.body:getY() > GameConfig.WORLD_HEIGHT + 100 then
-        local spawn = GAME_STATE.currentLevel.spawn
-        player.body:setPosition(spawn.x, spawn.y)
-        player.body:setLinearVelocity(0, 0)
+    -- Caída al vacío: dispara shared-fate (el equipo entero reinicia).
+    -- En single-player el "equipo" es este único player, pero el pattern
+    -- ya deja la puerta abierta para la versión network.
+    if player.body:getY() > FALL_DEATH_Y then
+        triggerFail("Un jugador cayó al vacío")
+        return
     end
 
     checkGoal(player)
@@ -257,9 +302,42 @@ function love.draw()
 
     if GAME_STATE.mode == "menu" then
         drawMenu()
-    elseif GAME_STATE.mode == "playing" then
+    elseif GAME_STATE.mode == "playing" or GAME_STATE.mode == "failed" then
         drawGame()
+        if GAME_STATE.mode == "failed" then
+            drawFailOverlay()
+        end
     end
+end
+
+function drawFailOverlay()
+    local w = love.graphics.getWidth()
+    local h = love.graphics.getHeight()
+
+    -- Tint rojizo para marcar la urgencia
+    love.graphics.setColor(0.25, 0, 0, 0.55)
+    love.graphics.rectangle("fill", 0, 0, w, h)
+
+    love.graphics.setColor(1, 0.35, 0.35)
+    love.graphics.setNewFont(72)
+    love.graphics.printf("¡FALLASTE!", 0, h * 0.28, w, "center")
+
+    love.graphics.setColor(1, 1, 1)
+    love.graphics.setNewFont(22)
+    love.graphics.printf(GAME_STATE.failReason or "", 0, h * 0.42, w, "center")
+
+    local remaining = math.max(0, FAIL_COUNTDOWN - GAME_STATE.failTimer)
+    love.graphics.setColor(1, 0.9, 0.3)
+    love.graphics.setNewFont(40)
+    love.graphics.printf(
+        string.format("Reiniciando en %.1f", remaining),
+        0, h * 0.52, w, "center"
+    )
+
+    love.graphics.setColor(0.6, 0.6, 0.6)
+    love.graphics.setNewFont(16)
+    love.graphics.printf("ESC para volver al menú",
+        0, h * 0.65, w, "center")
 end
 
 function drawMenu()
@@ -344,6 +422,8 @@ function drawGame()
     love.graphics.setNewFont(14)
     love.graphics.print("JUMBLE - " .. level.name, 10, 10)
     love.graphics.print("Jugadores: " .. #GAME_STATE.players, 10, 30)
+    love.graphics.setColor(0.9, 0.8, 0.3)
+    love.graphics.print("Intentos: " .. GAME_STATE.attempts, 10, 50)
 
     love.graphics.setColor(0.6, 0.6, 0.6)
     love.graphics.print("A/D - Mover | SPACE - Saltar | ESC - Menú",
@@ -389,6 +469,11 @@ function love.keypressed(key)
             GAME_STATE.mode = "menu"
         elseif key == "space" and GAME_STATE.levelCompleted then
             reloadCurrentLevel()
+        end
+    elseif GAME_STATE.mode == "failed" then
+        if key == "escape" then
+            -- Abortar el countdown y volver al menú.
+            GAME_STATE.mode = "menu"
         end
     end
 end
