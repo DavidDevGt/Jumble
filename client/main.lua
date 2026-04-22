@@ -36,19 +36,27 @@ PLAYER_COLORS = {
 -- propias cuando entren más niveles).
 ----------------------------------------------------------------------
 
+-- Convención: la primera plataforma de cada nivel es el SPAWN PLATFORM
+-- (base ancha donde aparece el jugador). La última es la plataforma
+-- del goal (también ancha, para que el landing sea claro). Los gaps
+-- del medio son el desafío.
+--
+-- Todo lo que no sea plataforma = vacío. Caerse = fail.
+
 local function createLevel1()
     return {
         name     = "Nivel 1 - Ascenso",
-        spawn    = { x = 90,  y = 820 },
+        spawn    = { x = 110, y = 790 },
         platforms = {
-            { x = 200,  y = 760, w = 150, h = 20 },
-            { x = 420,  y = 670, w = 150, h = 20 },
-            { x = 220,  y = 580, w = 150, h = 20 },
-            { x = 500,  y = 495, w = 200, h = 20 },
-            { x = 850,  y = 395, w = 200, h = 20 },
-            { x = 1200, y = 290, w = 200, h = 20 },
+            { x = 20,   y = 820, w = 220, h = 20 },   -- SPAWN
+            { x = 320,  y = 740, w = 140, h = 20 },
+            { x = 540,  y = 650, w = 140, h = 20 },
+            { x = 340,  y = 560, w = 140, h = 20 },
+            { x = 600,  y = 470, w = 180, h = 20 },
+            { x = 880,  y = 380, w = 180, h = 20 },
+            { x = 1180, y = 280, w = 240, h = 20 },   -- GOAL platform
         },
-        goal = { x = 1320, y = 215, w = 60, h = 60 },
+        goal = { x = 1260, y = 220, w = 60, h = 60 },
     }
 end
 
@@ -57,19 +65,19 @@ end
 local function createLevel2()
     return {
         name     = "Nivel 2 - Precisión",
-        spawn    = { x = 90,  y = 820 },
+        spawn    = { x = 100, y = 790 },
         platforms = {
-            { x = 180,  y = 810, w = 80,  h = 20 },
-            { x = 350,  y = 730, w = 80,  h = 20 },
-            { x = 180,  y = 640, w = 80,  h = 20 },
-            { x = 380,  y = 570, w = 80,  h = 20 },
-            { x = 600,  y = 520, w = 90,  h = 20 },
-            { x = 820,  y = 440, w = 80,  h = 20 },
-            { x = 1030, y = 380, w = 80,  h = 20 },
-            { x = 1230, y = 310, w = 90,  h = 20 },
-            { x = 1400, y = 230, w = 100, h = 20 },
+            { x = 20,   y = 820, w = 180, h = 20 },   -- SPAWN
+            { x = 280,  y = 740, w = 90,  h = 20 },
+            { x = 110,  y = 650, w = 90,  h = 20 },
+            { x = 320,  y = 560, w = 90,  h = 20 },
+            { x = 540,  y = 490, w = 100, h = 20 },
+            { x = 770,  y = 420, w = 90,  h = 20 },
+            { x = 980,  y = 360, w = 90,  h = 20 },
+            { x = 1180, y = 290, w = 100, h = 20 },
+            { x = 1370, y = 210, w = 200, h = 20 },   -- GOAL platform
         },
-        goal = { x = 1430, y = 150, w = 60, h = 60 },
+        goal = { x = 1450, y = 150, w = 60, h = 60 },
     }
 end
 
@@ -125,15 +133,16 @@ end
 function initPhysics()
     _G.physicsWorld = love.physics.newWorld(0, GameConfig.GRAVITY, true)
 
-    -- Suelo (base)
-    local groundBody  = love.physics.newBody(physicsWorld, 0, GameConfig.WORLD_HEIGHT - 20)
-    local groundShape = love.physics.newRectangleShape(0, 0, GameConfig.WORLD_WIDTH, 40)
-    love.physics.newFixture(groundBody, groundShape, 1)
-    groundBody:setFixedRotation(true)
-    _G.groundBody  = groundBody
-    _G.groundShape = groundShape
-
-    -- Paredes (evitan caer por los laterales)
+    -- No hay suelo full-width. Cada nivel define su propio spawn platform
+    -- como primera entrada en `platforms`. Todo lo que no es plataforma = vacío.
+    -- Solo quedan las paredes, que centran el cuadro de juego y evitan que
+    -- el player escape lateralmente (termina cayendo igual por las esquinas).
+    --
+    -- Body en (x=pos, y=WORLD_HEIGHT/2) con shape centrado: physics y visual
+    -- coinciden (cubren el ancho completo en Y, solapados con el borde de
+    -- ventana). Antes el suelo tenía un bug — body en X=0 con shape ancho
+    -- 1600 centrado dejaba el shape cubriendo X=-800..800 mientras el draw
+    -- lo pintaba en X=0..1600. De ahí el "piso fantasma" desde X=800.
     local leftWall = love.physics.newBody(physicsWorld, -20, GameConfig.WORLD_HEIGHT/2)
     love.physics.newFixture(leftWall,
         love.physics.newRectangleShape(0, 0, 40, GameConfig.WORLD_HEIGHT), 1)
@@ -460,21 +469,52 @@ end
 
 function drawGame()
     local level  = GAME_STATE.currentLevel
+    local worldW = GameConfig.WORLD_WIDTH
     local worldH = GameConfig.WORLD_HEIGHT
 
-    -- Suelo
-    love.graphics.setColor(0.3, 0.3, 0.3)
-    love.graphics.rectangle("fill", 0, worldH - 20, GameConfig.WORLD_WIDTH, 40)
+    -- Fondo con hazard zone: gradiente de arriba (azul oscuro, zona "aire
+    -- neutra") a abajo (rojo oscuro, zona "caer aquí = fail"). Es puramente
+    -- visual — la detección real es por Y del player. Pero le da al jugador
+    -- un indicador constante de dónde está el peligro.
+    local gradientSteps = 8
+    for i = 0, gradientSteps - 1 do
+        local t = i / (gradientSteps - 1)  -- 0 arriba, 1 abajo
+        -- Interpolamos de (0.10, 0.11, 0.16) a (0.35, 0.08, 0.10)
+        local r = 0.10 + (0.35 - 0.10) * t
+        local g = 0.11 + (0.08 - 0.11) * t
+        local b = 0.16 + (0.10 - 0.16) * t
+        love.graphics.setColor(r, g, b)
+        love.graphics.rectangle("fill",
+            0, i * worldH / gradientSteps,
+            worldW, worldH / gradientSteps + 1)
+    end
 
-    -- Paredes
-    love.graphics.setColor(0.4, 0.4, 0.4)
+    -- Paredes (físicas también, para que el player no escape)
+    love.graphics.setColor(0.45, 0.45, 0.5)
     love.graphics.rectangle("fill", 0, 0, 20, worldH)
-    love.graphics.rectangle("fill", GameConfig.WORLD_WIDTH - 20, 0, 20, worldH)
+    love.graphics.rectangle("fill", worldW - 20, 0, 20, worldH)
 
-    -- Plataformas
-    love.graphics.setColor(0.85, 0.45, 0.2)
-    for _, p in ipairs(level.platforms) do
+    -- Plataformas: fill + borde claro. El borde marca visualmente "este es
+    -- el borde sólido — más allá es vacío". Responde al pedido de distinguir
+    -- claramente superficie segura de caída.
+    for i, p in ipairs(level.platforms) do
+        -- Fill (tono ligeramente más claro en la spawn y la goal platform
+        -- para que se reconozcan a simple vista)
+        local isSpawn = (i == 1)
+        local isGoal  = (i == #level.platforms)
+        if isSpawn then
+            love.graphics.setColor(0.35, 0.75, 0.35)   -- Verde: segura, spawn
+        elseif isGoal then
+            love.graphics.setColor(0.85, 0.55, 0.25)   -- Naranja más saturado: meta
+        else
+            love.graphics.setColor(0.70, 0.42, 0.20)   -- Naranja base
+        end
         love.graphics.rectangle("fill", p.x, p.y, p.w, p.h)
+
+        -- Borde
+        love.graphics.setColor(1, 0.85, 0.6)
+        love.graphics.setLineWidth(2)
+        love.graphics.rectangle("line", p.x + 0.5, p.y + 0.5, p.w - 1, p.h - 1)
     end
 
     -- Goal (pulsante)
@@ -484,27 +524,33 @@ function drawGame()
     love.graphics.rectangle("fill", goal.x, goal.y, goal.w, goal.h)
     love.graphics.setColor(1, 1, 1)
     love.graphics.setLineWidth(3)
-    love.graphics.rectangle("line", goal.x, goal.y, goal.w, goal.h)
+    love.graphics.rectangle("line", goal.x + 0.5, goal.y + 0.5, goal.w - 1, goal.h - 1)
+    love.graphics.setNewFont(14)
+    love.graphics.setColor(0, 0, 0, 0.7)
+    love.graphics.printf("GOAL", goal.x, goal.y + goal.h/2 - 8, goal.w, "center")
 
-    -- Players
+    -- Players — render en píxel entero para que no oscile por el settle
+    -- de Box2D (antes el cuadro podía verse 1px arriba o abajo por la
+    -- tolerancia de penetración).
     for id, player in pairs(GAME_STATE.players) do
         local color = player.color or PLAYER_COLORS[id] or PLAYER_COLORS[1]
+        local size  = player.width or GameConfig.PLAYER_WIDTH
+        local drawX = math.floor(player.x - size/2)
+        local drawY = math.floor(player.y - size/2)
+
         love.graphics.setColor(color[1], color[2], color[3])
-        local size = player.width or GameConfig.PLAYER_WIDTH
-        love.graphics.rectangle("fill",
-            player.x - size/2, player.y - size/2, size, size)
+        love.graphics.rectangle("fill", drawX, drawY, size, size)
 
         love.graphics.setColor(player.isGrounded and 0.3 or 1,
                                player.isGrounded and 1   or 1,
                                player.isGrounded and 0.3 or 1)
         love.graphics.setLineWidth(2)
-        love.graphics.rectangle("line",
-            player.x - size/2, player.y - size/2, size, size)
+        love.graphics.rectangle("line", drawX + 0.5, drawY + 0.5, size - 1, size - 1)
 
         love.graphics.setColor(1, 1, 1)
         love.graphics.setNewFont(12)
         love.graphics.printf(player.name or ("P" .. id),
-            player.x - size/2, player.y - size/2 - 18, size, "center")
+            drawX, drawY - 18, size, "center")
     end
 
     -- HUD
