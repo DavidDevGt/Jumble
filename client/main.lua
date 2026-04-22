@@ -38,7 +38,7 @@ PLAYER_COLORS = {
 
 local function createLevel1()
     return {
-        name     = "Nivel 1",
+        name     = "Nivel 1 - Ascenso",
         spawn    = { x = 90,  y = 820 },
         platforms = {
             { x = 200,  y = 760, w = 150, h = 20 },
@@ -52,6 +52,31 @@ local function createLevel1()
     }
 end
 
+-- Nivel 2: plataformas más chicas, gaps más largos. Exige precisión
+-- de salto y timing al girarse en el aire.
+local function createLevel2()
+    return {
+        name     = "Nivel 2 - Precisión",
+        spawn    = { x = 90,  y = 820 },
+        platforms = {
+            { x = 180,  y = 810, w = 80,  h = 20 },
+            { x = 350,  y = 730, w = 80,  h = 20 },
+            { x = 180,  y = 640, w = 80,  h = 20 },
+            { x = 380,  y = 570, w = 80,  h = 20 },
+            { x = 600,  y = 520, w = 90,  h = 20 },
+            { x = 820,  y = 440, w = 80,  h = 20 },
+            { x = 1030, y = 380, w = 80,  h = 20 },
+            { x = 1230, y = 310, w = 90,  h = 20 },
+            { x = 1400, y = 230, w = 100, h = 20 },
+        },
+        goal = { x = 1430, y = 150, w = 60, h = 60 },
+    }
+end
+
+local function allLevels()
+    return { createLevel1(), createLevel2() }
+end
+
 ----------------------------------------------------------------------
 -- Lifecycle
 ----------------------------------------------------------------------
@@ -60,13 +85,19 @@ function love.load()
     Logger:info("JUMBLE", "Inicializando cliente...")
 
     GAME_STATE = {
-        -- Modos: "menu", "playing", "failed", (más adelante: "lobby", "completed")
+        -- Modos: "menu", "playing", "failed", "all_done"
+        -- (más adelante: "lobby", "completed" como transiciones explícitas)
         mode                 = "menu",
         menuSelection        = 1,
         players              = {},
         localPlayerId        = 1,
         gameTime             = 0,
-        currentLevel         = createLevel1(),
+
+        -- Progresión. GAME_STATE.currentLevel es la referencia activa;
+        -- los bodies de sus platforms viven dentro suyo (en platformBodies).
+        levels               = allLevels(),
+        currentLevelIndex    = 1,
+        currentLevel         = nil, -- se setea más abajo
 
         -- Estado del nivel actual
         levelCompleted       = false,
@@ -78,8 +109,9 @@ function love.load()
         -- entrarán acá simultáneamente.
         failTimer            = 0,
         failReason           = nil,
-        attempts             = 0,
+        attempts             = 0,  -- acumulativo por sesión (todos los niveles)
     }
+    GAME_STATE.currentLevel = GAME_STATE.levels[GAME_STATE.currentLevelIndex]
 
     initPhysics()
     loadLevel(GAME_STATE.currentLevel)
@@ -171,6 +203,34 @@ function reloadCurrentLevel()
     GAME_STATE.failReason          = nil
 
     loadLevel(level)
+end
+
+-- Avanza al siguiente nivel de GAME_STATE.levels, o marca "all_done"
+-- si ya se jugó el último. También es la entrada a la progression en
+-- el modo network: cuando el server broadcastea "level_completed" con
+-- el siguiente índice, esto lo carga.
+function advanceToNextLevel()
+    GAME_STATE.currentLevelIndex = GAME_STATE.currentLevelIndex + 1
+
+    if GAME_STATE.currentLevelIndex > #GAME_STATE.levels then
+        GAME_STATE.mode = "all_done"
+        Logger:info("JUMBLE", "¡Todos los niveles completados en " ..
+                              GAME_STATE.attempts .. " intentos!")
+        return
+    end
+
+    GAME_STATE.currentLevel = GAME_STATE.levels[GAME_STATE.currentLevelIndex]
+    reloadCurrentLevel()
+    GAME_STATE.mode = "playing"
+end
+
+-- Resetea la progresión al primer nivel y el contador de intentos.
+-- Punto único para volver a "nueva partida" desde any estado post-juego.
+function resetProgression()
+    GAME_STATE.currentLevelIndex  = 1
+    GAME_STATE.currentLevel       = GAME_STATE.levels[1]
+    GAME_STATE.attempts           = 0
+    reloadCurrentLevel()
 end
 
 -- Shared-fate: dispara el overlay de fallo y arranca el countdown para
@@ -307,7 +367,37 @@ function love.draw()
         if GAME_STATE.mode == "failed" then
             drawFailOverlay()
         end
+    elseif GAME_STATE.mode == "all_done" then
+        drawAllDoneOverlay()
     end
+end
+
+function drawAllDoneOverlay()
+    local w = love.graphics.getWidth()
+    local h = love.graphics.getHeight()
+
+    love.graphics.setColor(0.1, 0.2, 0.1)
+    love.graphics.rectangle("fill", 0, 0, w, h)
+
+    love.graphics.setColor(0.3, 1, 0.3)
+    love.graphics.setNewFont(64)
+    love.graphics.printf("¡JUEGO COMPLETADO!", 0, h * 0.28, w, "center")
+
+    love.graphics.setColor(1, 1, 1)
+    love.graphics.setNewFont(24)
+    love.graphics.printf(
+        string.format("Terminaste los %d niveles", #GAME_STATE.levels),
+        0, h * 0.44, w, "center"
+    )
+    love.graphics.printf(
+        string.format("Intentos totales: %d", GAME_STATE.attempts),
+        0, h * 0.50, w, "center"
+    )
+
+    love.graphics.setColor(0.6, 0.6, 0.6)
+    love.graphics.setNewFont(18)
+    love.graphics.printf("SPACE / ENTER / ESC para volver al menú",
+        0, h * 0.68, w, "center")
 end
 
 function drawFailOverlay()
@@ -420,13 +510,14 @@ function drawGame()
     -- HUD
     love.graphics.setColor(0.2, 0.8, 0.2)
     love.graphics.setNewFont(14)
-    love.graphics.print("JUMBLE - " .. level.name, 10, 10)
+    love.graphics.print(string.format("JUMBLE - %s  [%d/%d]",
+        level.name, GAME_STATE.currentLevelIndex, #GAME_STATE.levels), 10, 10)
     love.graphics.print("Jugadores: " .. #GAME_STATE.players, 10, 30)
     love.graphics.setColor(0.9, 0.8, 0.3)
     love.graphics.print("Intentos: " .. GAME_STATE.attempts, 10, 50)
 
     love.graphics.setColor(0.6, 0.6, 0.6)
-    love.graphics.print("A/D - Mover | SPACE - Saltar | ESC - Menú",
+    love.graphics.print("A/D - Mover | SPACE - Saltar | R - Reintentar | ESC - Menú",
         10, worldH - 30)
 
     -- Overlay de nivel completado
@@ -440,9 +531,14 @@ function drawGame()
         love.graphics.setNewFont(64)
         love.graphics.printf("¡NIVEL COMPLETADO!", 0, h * 0.33, w, "center")
 
+        local isLast = GAME_STATE.currentLevelIndex >= #GAME_STATE.levels
+        local nextHint = isLast
+            and "SPACE para ver resultados finales"
+            or  "SPACE para el siguiente nivel"
+
         love.graphics.setColor(1, 1, 1)
         love.graphics.setNewFont(20)
-        love.graphics.printf("SPACE para reiniciar  |  ESC para volver al menú",
+        love.graphics.printf(nextHint .. "  |  R para repetir  |  ESC al menú",
             0, h * 0.55, w, "center")
     end
 end
@@ -468,11 +564,20 @@ function love.keypressed(key)
         if key == "escape" then
             GAME_STATE.mode = "menu"
         elseif key == "space" and GAME_STATE.levelCompleted then
+            advanceToNextLevel()
+        elseif key == "r" then
+            -- Reintentar el nivel actual (sin avanzar). Útil si querés
+            -- practicar un nivel específico.
             reloadCurrentLevel()
         end
     elseif GAME_STATE.mode == "failed" then
         if key == "escape" then
             -- Abortar el countdown y volver al menú.
+            GAME_STATE.mode = "menu"
+        end
+    elseif GAME_STATE.mode == "all_done" then
+        if key == "escape" or key == "return" or key == "space" then
+            resetProgression()
             GAME_STATE.mode = "menu"
         end
     end
